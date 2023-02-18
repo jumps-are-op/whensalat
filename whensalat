@@ -1,0 +1,144 @@
+#!/bin/sh
+
+# Made by jumps-are-op
+# This software is under GPL version 3 and comes with ABSOLUTELY NO WARRANTY
+
+main(){
+	set -e
+	while getopts hncm: OPT;do
+		case $OPT in
+			n)next=1;;
+			c)clearcache=1;;
+			m)method=$OPTARG;;
+			h|*)dishelp;;
+		esac
+	done
+	shift $((OPTIND-1))
+
+	# Cache
+	cachedir=${XDG_CACHE_HOME:-${HOME:-.}/.cache}/whensalat
+	[ "$clearcache" ] && rm -rf -- "$cachedir"
+
+	if [ ! "$city" ] || [ ! "$country" ];then
+		# Get current city and country
+		info=$(curl -Ss ipinfo.io)
+		loc=$(printf %s "$info" | jq '.loc') || true
+		if [ ! "$loc" ] || [ "$loc" = null ];then
+			echo "Failed to get your location (connection issue?)." >&2
+			exit 1
+		else
+			longitude=${loc#*,}
+			longitude=${longitude%\"}
+			latitude=${loc%,*}
+			latitude=${latitude#\"}
+		fi
+	fi
+
+	cachefile=$cachedir/${longitude}_$latitude
+	mkdir -p -- "$cachedir"
+	touch -- "$cachefile"
+
+	# Get last month cache was written
+	# And check if it's still valid
+	lastmodificationmonth=$(head -n1 -- "$cachefile")
+	year=$(date +%Y)
+	month=$(date +%m)
+	day=$(date +%d)
+
+	if [ "$lastmodificationmonth" != "$month" ];then
+		data=$(curl -Ss "api.aladhan.com/v1/calendar/$month/$year?longitude=$longitude&latitude=$latitude&month=$month&year=$year${method:+&method=$method}")
+
+		cat >"$cachefile" <<-EOF
+			$month
+			$data
+		EOF
+
+	else
+		data=$({ read -r _; cat;}<"$cachefile")
+
+	fi
+
+	timings=$(printf %s "$data" | jq ".data[$day].timings")
+	getsalattimefromjsontimings "$timings"
+
+	[ ! "$next" ] && {
+		cat <<-EOF
+			Fajr:    $Fajr
+			Sunrise: $Sunrise
+			Dhuhr:   $Dhuhr
+			Asr:     $Asr
+			Maghrib: $Maghrib
+			Isha:    $Isha
+		EOF
+		exit 0
+	}
+
+	hour=$(date +%H)
+	minute=$(date +%M)
+
+	for salatname in Fajr Dhuhr Asr Maghrib Isha;do
+		salattime=$(eval echo "\"\$$salatname\"")
+		salathour=${salattime%%:*}
+		salatminute=${salattime##*:}
+
+		[ "$hour" -lt "$salathour" ] && {
+			echo "$salatname $salathour:$salatminute"
+			break
+		}
+
+		[ "$hour" = "$salathour" ] &&
+			[ "$minute" -lt "$salatminute" ] && {
+			echo "$salatname $salathour:$salatminute"
+			break
+		}
+	done
+}
+
+# This function have bad naming
+# Get salat time from json timings
+getsalattimefromjsontimings(){
+	i=1
+	while read -r time;do
+		time=${time#\"}
+		time=${time%% *}
+		case $i in
+			1)Fajr=$time;;
+			2)Sunrise=$time;;
+			3)Dhuhr=$time;;
+			4)Asr=$time;;
+			5)Maghrib=$time;;
+			6)Isha=$time;;
+		esac
+		i=$((i+1))
+	done <<-EOF
+		$(printf %s "$1" | jq ".Fajr, .Sunrise, .Dhuhr, .Asr, .Maghrib, .Isha")
+	EOF
+}
+
+dishelp(){
+	cat >&2 <<EOF
+whensalat  Know your praying times from the terminal
+Copyright (C) 2023  Jump are op (jumpsareop@gmail.com)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+USAGE: whensalat [OPTIONS]
+
+OPTIONS:
+	-n     Print next salat
+	-c     Clear cached salat times
+	-m     Set method
+	       (see method section in aladhan.com/prayer-times-api#GetCalendar)
+EOF
+	exit 1
+}
+
+main "$@"
