@@ -1,16 +1,16 @@
-#!/bin/sh
+#!/bin/sh -eu
 
-# Made by jumps-are-op
+# Made by jumps are op (jumpsareop@gmail.com)
 # This software is under GPL version 3 and comes with ABSOLUTELY NO WARRANTY
 
 main(){
-	set -e
-	while getopts hncm: OPT;do
+	: "${all=}${thirds=}${next=}${nocache=}${clearcache=}${cachelocation=}"
+	while getopts hatncClm: OPT;do
 		case $OPT in
-			n)next=1;;
-			c)clearcache=1;;
+			a)all=1;; t)thirds=1;; n)next=1;; c)nocache=1;; C)clearcache=1;;
+			l)cachelocation=1;;
 			m)method=$OPTARG;;
-			h|*)dishelp;;
+			*)dishelp;;
 		esac
 	done
 	shift $((OPTIND-1))
@@ -18,100 +18,138 @@ main(){
 	# Cache
 	cachedir=${XDG_CACHE_HOME:-${HOME:-.}/.cache}/whensalat
 	[ "$clearcache" ] && rm -rf -- "$cachedir"
+	[ ! "$nocache" ] && mkdir -p -- "$cachedir"
 
-	if [ ! "$city" ] || [ ! "$country" ];then
-		# Get current city and country
-		info=$(curl -Ss ipinfo.io)
-		loc=$(printf %s "$info" | jq '.loc') || true
+	# Get current location
+	if [ "$cachelocation" ] && [ -f "$cachedir/cached_location" ] &&
+			[ -r "$cachedir/cached_location" ];then
+		loc=$(cat -- "$cachedir/cached_location")
+	else
+		loc=$(curl -Ss https://ipinfo.io | jq '.loc') || true
 		if [ ! "$loc" ] || [ "$loc" = null ];then
 			echo "Failed to get your location (connection issue?)." >&2
 			exit 1
-		else
-			longitude=${loc#*,}
-			longitude=${longitude%\"}
-			latitude=${loc%,*}
-			latitude=${latitude#\"}
 		fi
+		[ ! "$nocache" ] && echo "$loc" >"$cachedir/cached_location"
 	fi
+	longitude=${loc#*,} longitude=${longitude%\"}
+	latitude=${loc%,*} latitude=${latitude#\"}
 
-	cachefile=$cachedir/${longitude}_$latitude
-	mkdir -p -- "$cachedir"
-	touch -- "$cachefile"
+	year=$(date +%Y) month=$(date +%m) day=$(date +%d)
+	month=${month#0} day=${day#0}
+	BASEURL=https://api.aladhan.com/v1/calendar/$year/$month
+	REST_ARGS=longitude=$longitude\&latitude=$latitude${method+&method=$method}
 
-	# Get last month cache was written
-	# And check if it's still valid
-	lastmodificationmonth=$(head -n1 -- "$cachefile")
-	year=$(date +%Y)
-	month=$(date +%m)
-	day=$(date +%d)
+	if [ ! "$nocache" ];then
+		cachefile=$cachedir/${longitude}_$latitude
+		touch -- "$cachefile"
 
-	if [ "$lastmodificationmonth" != "$month" ];then
-		data=$(curl -Ss "api.aladhan.com/v1/calendar/$month/$year?longitude=$longitude&latitude=$latitude&month=$month&year=$year${method:+&method=$method}")
-
-		cat >"$cachefile" <<-EOF
-			$month
-			$data
-		EOF
-
+		# Get last month cache was written and check if it's still valid
+		read -r lastmodificationmonth <"$cachefile" || true
+		if [ "$lastmodificationmonth" != "$month" ];then
+			cat >"$cachefile" <<-EOF
+				$month
+				$(curl -Ss "$BASEURL?$REST_ARGS&month=$month&year=$year")
+			EOF
+		fi
+		data=$(tail -n +2 <"$cachefile")
 	else
-		data=$({ read -r _; cat;}<"$cachefile")
-
+		data=$(curl -Ss "$BASEURL?$REST_ARGS&month=$month&year=$year")
 	fi
 
-	timings=$(printf %s "$data" | jq ".data[$day].timings")
-	getsalattimefromjsontimings "$timings"
+	getsalattimefromjsontimings \
+		"$(printf %s "$data" | jq ".data[$day].timings")"
 
-	[ ! "$next" ] && {
-		cat <<-EOF
-			Fajr:    $Fajr
-			Sunrise: $Sunrise
-			Dhuhr:   $Dhuhr
-			Asr:     $Asr
-			Maghrib: $Maghrib
-			Isha:    $Isha
-		EOF
+	# shellcheck disable=SC2154
+	[ "$next$#" = 0 ] && {
+		# "Small" hack to add spaces
+		{ [ "$all" ] && all=;} || unset all
+		{ [ "$thirds" ] && thirds=;} || unset thirds
+		cat <<EOF
+${all+Imsak:   ${thirds+  } $Imsak
+}Fajr:   ${all+ }${all-${thirds+ }}${thirds+  } $Fajr
+Sunrise:${all+ }${all-${thirds+ }}${thirds+  } $Sunrise
+Dhuhr:  ${all+ }${all-${thirds+ }}${thirds+  } $Dhuhr
+Asr:    ${all+ }${all-${thirds+ }}${thirds+  } $Asr
+${all+Sunset:  ${thirds+  } $Sunset
+}Maghrib:${all+ }${all-${thirds+ }}${thirds+  } $Maghrib
+Isha:   ${all+ }${all-${thirds+ }}${thirds+  } $Isha${all+
+}${all-${thirds+
+}}${thirds+Firstthird: $Firstthird
+}${all+Midnight:${thirds+  } $Midnight${thirds+
+}}${thirds+Lastthird:  $Lastthird}
+EOF
 		exit 0
 	}
 
-	hour=$(date +%H)
-	minute=$(date +%M)
+	if [ $# != 0 ];then
+		for salat;do
+			case $(printf %s "$salat" | tr '[:upper:]' '[:lower:]') in
+				imsak)${all:+echo "$Imsak"};;
+				fajr)echo "$Fajr";;
+				sunrise)echo "$Sunrise";;
+				dhuhr)echo "$Dhuhr";;
+				asr)echo "$Asr";;
+				sunset)${all:+echo "$Sunset"};;
+				maghrib)echo "$Maghrib";;
+				isha)echo "$Isha";;
+				firstthird)${thirds:+echo "$Firstthird"};;
+				midnight)${all:+echo "$Midnight"};;
+				lastthird)${thirds:+echo "$Lastthird"};;
+			esac
+		done
+		exit 0
+	fi
 
-	for salatname in Fajr Dhuhr Asr Maghrib Isha;do
+	hour=$(date +%H) minute=$(date +%M)
+
+	# Note: to this to work, times need to be in this order
+	# (starting from 00:00)
+	# Midnight Lastthird Imsak Fajr Sunrise Dhuhr Asr Sunset Maghrib
+	# Isha Firstthird
+	# Note: If Sunset and Maghrib are the same time, Maghrib will be displayed.
+	for salatname in ${all:+Midnight} ${thirds:+Lastthird} ${all:+Imsak} \
+		Fajr Sunrise Dhuhr Asr ${all:+Sunset} Maghrib Isha \
+		${thirds:+Firstthird};do
 		salattime=$(eval echo "\"\$$salatname\"")
-		salathour=${salattime%%:*}
-		salatminute=${salattime##*:}
+		salathour=${salattime%%:*} salatminute=${salattime##*:}
 
-		[ "$hour" -lt "$salathour" ] && {
+		[ "$hour" -lt "$salathour" ] ||
+		{ [ "$hour" = "$salathour" ] && [ "$minute" -lt "$salatminute" ];} && {
+			[ "$salatname" = Sunset ] && [ "$Sunset" = "$Maghrib" ] &&
+				salatname=Maghrib
 			echo "$salatname $salathour:$salatminute"
-			break
-		}
-
-		[ "$hour" = "$salathour" ] &&
-			[ "$minute" -lt "$salatminute" ] && {
-			echo "$salatname $salathour:$salatminute"
-			break
+			exit 0
 		}
 	done
+	# If non of the above check, then It's the first time in the list
+	# (Midnight/Lastthird/Fajr)
+	[ "$all" ] && { echo "Midnight $Midnight"; exit 0;}
+	echo "${thirds:+Lastthird $Lastthird}${thirds:-Fajr $Fajr}"
+
 }
 
 # This function have bad naming
 # Get salat time from json timings
 getsalattimefromjsontimings(){
-	i=1
-	while read -r time;do
-		time=${time#\"}
-		time=${time%% *}
-		case $i in
-			1)Fajr=$time;;
-			2)Sunrise=$time;;
-			3)Dhuhr=$time;;
-			4)Asr=$time;;
-			5)Maghrib=$time;;
-			6)Isha=$time;;
-		esac
-		i=$((i+1))
-	done <<-EOF
-		$(printf %s "$1" | jq ".Fajr, .Sunrise, .Dhuhr, .Asr, .Maghrib, .Isha")
+	{
+		oldIFS=$IFS IFS='" '
+		readsalat(){ read -r _ "${1?}" _;}
+		readsalat Imsak
+		readsalat Fajr
+		readsalat Sunrise
+		readsalat Dhuhr
+		readsalat Asr
+		readsalat Sunset
+		readsalat Maghrib
+		readsalat Isha
+		readsalat Firstthird
+		readsalat Midnight
+		readsalat Lastthird
+		IFS=$oldIFS
+	} <<-EOF
+		$(printf %s "$1" | jq ".Imsak, .Fajr, .Sunrise, .Dhuhr, .Asr, .Sunset
+			, .Maghrib, .Isha, .Firstthird, .Midnight, .Lastthird")
 	EOF
 }
 
@@ -130,13 +168,49 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-USAGE: whensalat [OPTIONS]
+USAGE: whensalat [OPTIONS] [SALATNAME]
 
 OPTIONS:
-	-n     Print next salat
-	-c     Clear cached salat times
+	-n     Print next salat (times with -a and -t is included when specified)
+	-a     Also display Imsak, Midnight, and Sunset times
+	-t     Also display Firstthird and Lastthird times
+	-l     Use last cached location (see CACHING)
+	-c     Ignored cached salat times (see CACHING)
+	-C     Clear cached salat times and location (see CACHING)
 	-m     Set method
-	       (see method section in aladhan.com/prayer-times-api#GetCalendar)
+	   (see method section in https://aladhan.com/prayer-times-api#GetCalendar)
+
+SALATNAME:
+	Name of the salat to print.
+	If not specified and -n also not specified, then will print all salats.
+
+CACHING:
+	By default salat times and your location are cached,
+	but only salat times cache is used.
+	If you want to use your last cached location, use \`-l'.
+	If you want to only ignore salat times cache without deleting them, 
+	use \`-c'.
+	If you want to clear all cached data, use \`-C'.
+
+	EXAMPLES:
+	$ whensalat
+	Will try to find your location (even if it's already cached),
+	then cache it. Then will use cached salat times,
+	if they are already cached and still valid,
+	else will download it and cache it.
+
+	$ whensalat -C
+	Same as before, except delete all cache before doing anything.
+
+	$ whensalat -c
+	Same as the first one, except ignore salat times cache.
+
+	$ whensalat -l
+	Same as the first one, except use last cached loction (if exist).
+
+	$ whensalat -cl
+	Same as the first one, except ignore salat times cache,
+	and use last cached loction (if exist).
 EOF
 	exit 1
 }
