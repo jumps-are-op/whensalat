@@ -1,10 +1,12 @@
-#!/bin/sh -eu
-
-# Made by jumps are op (jumpsareop@gmail.com)
+#!/bin/sh --
+set -ue; export POSIXLY_CORRECT=1
+# Made by Jumps Are Op (jumpsareop@gmail.com)
 # This software is under GPL version 3 and comes with ABSOLUTELY NO WARRANTY
 
+alias p='printf %s' echo='printf %s\\n'
+
 main(){
-	: "${all=}${thirds=}${next=}${nocache=}${clearcache=}${cachelocation=}"
+	all= thirds= next= nocache= clearcache= cachelocation=
 	while getopts hatncClm: OPT;do
 		case $OPT in
 			a)all=1;; t)thirds=1;; n)next=1;; c)nocache=1;; C)clearcache=1;;
@@ -12,10 +14,8 @@ main(){
 			m)method=$OPTARG;;
 			*)dishelp;;
 		esac
-	done
-	shift $((OPTIND-1))
+	done; shift $((OPTIND-1))
 
-	# Cache
 	cachedir=${XDG_CACHE_HOME:-${HOME:-.}/.cache}/whensalat
 	[ "$clearcache" ] && rm -rf -- "$cachedir"
 	[ ! "$nocache" ] && mkdir -p -- "$cachedir"
@@ -46,26 +46,23 @@ main(){
 
 		# Get last month cache was written and check if it's still valid
 		read -r lastmodificationmonth <"$cachefile" || true
-		if [ "$lastmodificationmonth" != "$month" ];then
-			cat >"$cachefile" <<-EOF
-				$month
-				$(curl -Ss "$BASEURL?$REST_ARGS&month=$month&year=$year")
-			EOF
-		fi
+		[ "$lastmodificationmonth" != "$month" ] && cat >"$cachefile" <<-EOF
+			$month
+			$(curl -Ss "$BASEURL?$REST_ARGS&month=$month&year=$year")
+		EOF
 		data=$(tail -n +2 <"$cachefile")
 	else
 		data=$(curl -Ss "$BASEURL?$REST_ARGS&month=$month&year=$year")
 	fi
 
-	getsalattimefromjsontimings \
-		"$(printf %s "$data" | jq ".data[$day].timings")"
+	getsalattimefromjsontimings "$(p "$data" | jq ".data[$day].timings")"
 
 	# shellcheck disable=SC2154
 	[ "$next$#" = 0 ] && {
-		# "Small" hack to add spaces
+		# A "small" hack to add spaces
 		{ [ "$all" ] && all=;} || unset all
 		{ [ "$thirds" ] && thirds=;} || unset thirds
-		cat <<EOF
+		cat <<EOF ; exit 0
 ${all+Imsak:   ${thirds+  } $Imsak
 }Fajr:   ${all+ }${all-${thirds+ }}${thirds+  } $Fajr
 Sunrise:${all+ }${all-${thirds+ }}${thirds+  } $Sunrise
@@ -79,27 +76,24 @@ Isha:   ${all+ }${all-${thirds+ }}${thirds+  } $Isha${all+
 }${all+Midnight:${thirds+  } $Midnight${thirds+
 }}${thirds+Lastthird:  $Lastthird}
 EOF
-		exit 0
 	}
 
-	if [ $# != 0 ];then
-		for salat;do
-			case $(printf %s "$salat" | tr '[:upper:]' '[:lower:]') in
-				imsak)${all:+echo "$Imsak"};;
-				fajr)echo "$Fajr";;
-				sunrise)echo "$Sunrise";;
-				dhuhr)echo "$Dhuhr";;
-				asr)echo "$Asr";;
-				sunset)${all:+echo "$Sunset"};;
-				maghrib)echo "$Maghrib";;
-				isha)echo "$Isha";;
-				firstthird)${thirds:+echo "$Firstthird"};;
-				midnight)${all:+echo "$Midnight"};;
-				lastthird)${thirds:+echo "$Lastthird"};;
-			esac
-		done
-		exit 0
-	fi
+	for salat;do
+		case $(p "$salat" | tr '[:upper:]' '[:lower:]') in
+			imsak)${all:+echo "$Imsak"};;
+			fajr)echo "$Fajr";;
+			sunrise)echo "$Sunrise";;
+			dhuhr)echo "$Dhuhr";;
+			asr)echo "$Asr";;
+			sunset)${all:+echo "$Sunset"};;
+			maghrib)echo "$Maghrib";;
+			isha)echo "$Isha";;
+			firstthird)${thirds:+echo "$Firstthird"};;
+			midnight)${all:+echo "$Midnight"};;
+			lastthird)${thirds:+echo "$Lastthird"};;
+		esac
+	done
+	[ $# != 0 ] && exit 0
 
 	hour=$(date +%H) minute=$(date +%M)
 
@@ -111,7 +105,7 @@ EOF
 	for salatname in ${all:+Midnight} ${thirds:+Lastthird} ${all:+Imsak} \
 		Fajr Sunrise Dhuhr Asr ${all:+Sunset} Maghrib Isha \
 		${thirds:+Firstthird};do
-		salattime=$(eval echo "\"\$$salatname\"")
+		eval salattime="\$$salatname"
 		salathour=${salattime%%:*} salatminute=${salattime##*:}
 
 		[ "$hour" -lt "$salathour" ] ||
@@ -132,29 +126,23 @@ EOF
 # This function have bad naming
 # Get salat time from json timings
 getsalattimefromjsontimings(){
-	{
-		oldIFS=$IFS IFS='" '
-		readsalat(){ read -r _ "${1?}" _;}
-		readsalat Imsak
-		readsalat Fajr
-		readsalat Sunrise
-		readsalat Dhuhr
-		readsalat Asr
-		readsalat Sunset
-		readsalat Maghrib
-		readsalat Isha
-		readsalat Firstthird
-		readsalat Midnight
-		readsalat Lastthird
-		IFS=$oldIFS
-	} <<-EOF
-		$(printf %s "$1" | jq ".Imsak, .Fajr, .Sunrise, .Dhuhr, .Asr, .Sunset
-			, .Maghrib, .Isha, .Firstthird, .Midnight, .Lastthird")
+	oldIFS=$IFS IFS='" '
+	for time in Imsak Fajr Sunrise Dhuhr Asr Sunset Maghrib \
+		Isha Firstthird Midnight Lastthird;do
+		read -r _ "${time?}" _
+		eval "case \$$time in" \
+			"1[012]:*|0[[:digit:]]:*|[[:digit:]]:*);;" \
+			"*)$time=\$((\${$time%:*}-12)):\${$time#*:};;" \
+		"esac; case \$$time in [[:digit:]]:*)$time=0\$$time;;esac"
+	done <<-EOF
+		$(p "$1" | jq ".Imsak, .Fajr, .Sunrise, .Dhuhr, .Asr, .Sunset,
+			.Maghrib, .Isha, .Firstthird, .Midnight, .Lastthird")
 	EOF
+	IFS=$oldIFS
 }
 
 dishelp(){
-	cat >&2 <<EOF
+	cat >&2 <<"EOF"
 whensalat  Know your praying times from the terminal
 Copyright (C) 2023  Jump are op (jumpsareop@gmail.com)
 
@@ -171,13 +159,13 @@ GNU General Public License for more details.
 USAGE: whensalat [OPTIONS] [SALATNAME]
 
 OPTIONS:
-	-n     Print next salat (times with -a and -t is included when specified)
-	-a     Also display Imsak, Midnight, and Sunset times
-	-t     Also display Firstthird and Lastthird times
-	-l     Use last cached location (see CACHING)
-	-c     Ignored cached salat times (see CACHING)
-	-C     Clear cached salat times and location (see CACHING)
-	-m     Set method
+	-n  Print next salat (times with -a and -t is included when specified)
+	-a  Also display Imsak, Midnight, and Sunset times
+	-t  Also display Firstthird and Lastthird times
+	-l  Use last cached location (see CACHING)
+	-c  Ignored cached salat times (see CACHING)
+	-C  Clear cached salat times and location (see CACHING)
+	-m  Set method
 	   (see method section in https://aladhan.com/prayer-times-api#GetCalendar)
 
 SALATNAME:
@@ -187,10 +175,9 @@ SALATNAME:
 CACHING:
 	By default salat times and your location are cached,
 	but only salat times cache is used.
-	If you want to use your last cached location, use \`-l'.
-	If you want to only ignore salat times cache without deleting them, 
-	use \`-c'.
-	If you want to clear all cached data, use \`-C'.
+	If you want to use your last cached location, use `-l'.
+	If you want to only ignore cached times without deleting them, use `-c'.
+	If you want to clear all cached data, use `-C'.
 
 	EXAMPLES:
 	$ whensalat
