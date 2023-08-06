@@ -130,10 +130,6 @@ getsalattimefromjsontimings(){
 	for time in Imsak Fajr Sunrise Dhuhr Asr Sunset Maghrib \
 		Isha Firstthird Midnight Lastthird;do
 		read -r _ "${time?}" _
-		eval "case \$$time in" \
-			"1[012]:*|0[[:digit:]]:*|[[:digit:]]:*);;" \
-			"*)$time=\$((\${$time%:*}-12)):\${$time#*:};;" \
-		"esac; case \$$time in [[:digit:]]:*)$time=0\$$time;;esac"
 	done <<-EOF
 		$(p "$1" | jq ".Imsak, .Fajr, .Sunrise, .Dhuhr, .Asr, .Sunset,
 			.Maghrib, .Isha, .Firstthird, .Midnight, .Lastthird")
