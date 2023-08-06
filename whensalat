@@ -25,7 +25,7 @@ main(){
 			[ -r "$cachedir/cached_location" ];then
 		loc=$(cat -- "$cachedir/cached_location")
 	else
-		loc=$(curl -Ss https://ipinfo.io | jq '.loc') || true
+		loc=$(curl -Ss ipinfo.io | jq '.loc') || true
 		if [ ! "$loc" ] || [ "$loc" = null ];then
 			echo "Failed to get your location (connection issue?)." >&2
 			exit 1
