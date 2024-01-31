@@ -55,7 +55,8 @@ main(){
 		data=$(curl -Ss "$BASEURL?$REST_ARGS&month=$month&year=$year")
 	fi
 
-	getsalattimefromjsontimings "$(p "$data" | jq ".data[$day].timings")"
+	getsalattimefromjsontimings "$(p "$data" |
+		jq ".data[$((day-1))].timings")"
 
 	# shellcheck disable=SC2154
 	[ "$next$#" = 0 ] && {
